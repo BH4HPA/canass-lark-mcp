@@ -1,6 +1,7 @@
 #!/bin/bash
-# 飞书 MCP 服务器启动脚本
+# 飞书 MCP 服务器启动脚本（只读模式）
 # 使用应用身份（tenant_access_token）鉴权
+# 写入操作通过 lark_api.py 直调 API，不走 MCP
 
 set -e
 
@@ -16,30 +17,14 @@ if [ -z "$LARK_APP_ID" ] || [ -z "$LARK_APP_SECRET" ]; then
   exit 1
 fi
 
-# 启用的工具列表
+# 只读工具（7 个，~10K 字符 schema）
 TOOLS=$(cat <<'EOF'
 docs.v1.content.get,
-docx.v1.document.rawContent,
-docx.v1.document.create,
 docx.v1.documentBlock.list,
-docx.v1.documentBlock.get,
-docx.v1.documentBlock.patch,
-docx.v1.documentBlock.batchUpdate,
-docx.v1.documentBlockChildren.create,
-docx.v1.documentBlockChildren.batchDelete,
-docx.builtin.import,
-drive.v1.fileComment.create,
 drive.v1.fileComment.get,
 drive.v1.fileComment.list,
-drive.v1.fileComment.patch,
 drive.v1.fileCommentReply.list,
-drive.v1.fileCommentReply.update,
-drive.v1.permissionMember.create,
 drive.v1.permissionMember.list,
-drive.v1.permissionMember.update,
-drive.v1.permissionMember.transferOwner,
-im.v1.message.create,
-contact.v3.user.batchGetId,
 wiki.v2.space.getNode
 EOF
 )
