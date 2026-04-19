@@ -46,6 +46,27 @@ python3 /path/to/canass-lark-mcp/lark_api.py <METHOD> '<API_PATH>' ['<JSON_BODY>
 
 - `drive_v1_permissionMember_list` — 获取协作者列表
 
+## 查 lark-mcp 全量工具清单（排查 API 能力时用）
+
+当要做的事不在本文档里、又不想靠盲试接口时，先翻 **lark-mcp 自带的工具索引**——它把飞书 Open API 按业务域做了聚合，每行带官方文档链接。`start.sh` 只挂了 7 个只读工具；完整清单在本地 npm 缓存里：
+
+```bash
+# 定位已安装的 lark-mcp 包
+ls ~/.npm/_npx/*/node_modules/@larksuiteoapi/lark-mcp/package.json
+
+# 工具清单（~1900 行，中/英双份）
+MCP=~/.npm/_npx/*/node_modules/@larksuiteoapi/lark-mcp/docs
+ls $MCP   # → tools-zh.md, tools-en.md
+grep -n "docx.v1\|drive.v1.media\|board.v1" $MCP/tools-zh.md   # 按业务域搜
+```
+
+排查思路举例：
+- 要画流程图 → 搜 `diagram`、`board`、`mermaid` → 只找到 `board.v1.whiteboardNode.list`（只读），没有创建接口 → 换方案（图片上传，见下文）。
+- 要上传文件 → 搜 `upload` → 找到 `drive.v1.media.uploadPrepare/uploadFinish`（分片） → 另有 `drive/v1/medias/upload_all`（一次性，≤20 MB，MCP 未导出但 Open API 支持）。
+- 要启动本地 mcp 看 CLI 选项 → `npx -y @larksuiteoapi/lark-mcp mcp --help`（可用 `--debug` 查 token 交换与请求体）。
+
+> **没在 tools-zh.md 里找到 ≠ API 不支持**。lark-mcp 只 wrap 了官方 Open API 的一部分；其余接口可直接用 `lark_api.py <METHOD> '<path>'` 调。找不到 tool 时去 [open.feishu.cn/document](https://open.feishu.cn/document) 搜一下 API 路径。
+
 ## 直调 API 速查（写入）
 
 以下操作通过 `python3 lark_api.py` 执行。脚本自动从 `.env` 加载凭证并获取 token。
@@ -104,8 +125,11 @@ python3 lark_api.py POST '/open-apis/docx/v1/documents/<document_id>/blocks/<blo
 | 14 | `code` | 代码块 |
 | 15 | `quote` | 引用 |
 | 17 | `todo` | 待办事项（`style.done` 标记完成状态） |
+| 27 | `image` | 图片（见下方「插入图片 / 用 mermaid 画流程图」） |
 | 31 | `table` | 表格（需配合 `table_cell` 使用，见下文） |
 | 32 | `table_cell` | 表格单元格（不能单独创建，由 table 自动生成） |
+
+> **`block_type: 21`（diagram）/ 画板 / 思维导图**：Feishu Open API **不允许通过接口创建**（返回 `1770029 block not support to create`）。需要图表请走「插入图片」的方案——把 mermaid / graphviz 渲染成 PNG 再上传为 image 块。
 
 所有富文本块结构相同：`{ "elements": [{ "text_run": { "content": "文本" } }] }`。可通过 `text_run.text_element_style` 添加加粗（`bold`）、斜体（`italic`）等样式。
 
@@ -155,6 +179,54 @@ python3 lark_api.py POST '/open-apis/docx/v1/documents/<document_id>/blocks/<cel
 - `merge_info` — 单元格合并信息（默认每个 cell 都是 1×1）
 
 > **表格 cell 总数上限 ~50**：实测 24×4=96 会报 `1770001 invalid param`；7×3=21、5×4=20、6×3=18 均 OK。超限时请拆成多个小表，或改回 bullet 列表。
+
+### 插入图片 / 用 mermaid 画流程图
+
+Feishu 原生 diagram 块（`block_type: 21`）不能通过 API 创建；需要画流程图、架构图请走「图片」路线：本地用 [`@mermaid-js/mermaid-cli`](https://github.com/mermaid-js/mermaid-cli)（命令名 `mmdc`）把 mermaid 源码渲染为 PNG，再通过三步流程上传：
+
+**第一步：创建空 image 块**
+
+```bash
+python3 lark_api.py POST '/open-apis/docx/v1/documents/<document_id>/blocks/<document_id>/children' \
+  '{"children":[{"block_type":27,"image":{}}],"index":0}'
+```
+
+记下返回里的 `block_id`——上传素材时要用。
+
+**第二步：上传 PNG 为素材（multipart/form-data）**
+
+`lark_api.py` 不支持 multipart 上传，直接用 Python 或 curl。表单字段：`file_name`, `parent_type=docx_image`, `parent_node=<image_block_id>`, `size`, `file`（二进制）。
+
+```python
+import os, urllib.request
+boundary = "----MB" + os.urandom(8).hex()
+def f(name, value):
+    return f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode()
+data = open("chart.png", "rb").read()
+body = f("file_name","chart.png") + f("parent_type","docx_image") + \
+       f("parent_node", IMAGE_BLOCK_ID) + f("size", str(len(data))) + \
+       f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="chart.png"\r\nContent-Type: image/png\r\n\r\n'.encode() + \
+       data + f'\r\n--{boundary}--\r\n'.encode()
+req = urllib.request.Request(
+    "https://open.feishu.cn/open-apis/drive/v1/medias/upload_all",
+    data=body, method="POST",
+    headers={"Authorization": f"Bearer {TOKEN}",
+             "Content-Type": f"multipart/form-data; boundary={boundary}"})
+resp = urllib.request.urlopen(req).read()  # data.file_token
+```
+
+**第三步：用 token 绑定到 image 块**
+
+```bash
+python3 lark_api.py PATCH '/open-apis/docx/v1/documents/<document_id>/blocks/<image_block_id>' \
+  '{"replace_image":{"token":"<file_token>"}}'
+```
+
+> **mermaid 渲染经验**：用 `mmdc -i flow.mmd -o flow.png -b white -s 2` 输出 2× 高清 PNG；中文需系统装字体；节点里换行用 `<br/>`（不要 `\n`）；PDF/SVG 输出用 `-o foo.svg` 但 Feishu image 块只接受光栅格式（PNG/JPEG）。
+>
+> `upload_all` 上限 20 MB；超限改走 `upload_prepare` → `upload_part` → `upload_finish` 分片流程。
+>
+> **不要指望 code 块渲染 mermaid**：`block_type: 14` 带 `language` 值都只显示源码文本，不会渲染图。
 
 ### 更新单个块
 
