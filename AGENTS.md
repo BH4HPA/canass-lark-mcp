@@ -128,8 +128,11 @@ python3 lark_api.py POST '/open-apis/docx/v1/documents/<document_id>/blocks/<blo
 | 27 | `image` | 图片（见下方「插入图片 / 用 mermaid 画流程图」） |
 | 31 | `table` | 表格（需配合 `table_cell` 使用，见下文） |
 | 32 | `table_cell` | 表格单元格（不能单独创建，由 table 自动生成） |
+| 43 | `board` | 画板（**必须带 `?document_revision_id=-1` 才能创建，见下文**；API 仅能创建空白画板） |
 
-> **`block_type: 21`（diagram）/ 画板 / 思维导图**：Feishu Open API **不允许通过接口创建**（返回 `1770029 block not support to create`）。需要图表请走「插入图片」的方案——把 mermaid / graphviz 渲染成 PNG 再上传为 image 块。
+> **`block_type: 21`（diagram）**：Feishu Open API **不允许通过接口创建**（返回 `1770029 block not support to create`）。需要流程图 / 架构图时，如果要「可视完成」的图，走「插入图片」方案；如果只需要画板容器后续手工编辑，用 `block_type: 43`（见下一节）。
+>
+> **⚠️ lark-mcp 的 zod schema 有缺漏**：`docx.v1.documentBlockChildren.create` 的 `block_type` 枚举只到 40（不含 43），但实际 API 在带 `?document_revision_id=-1` 时支持 43。不要只看 MCP schema，要结合官方文档与真实 API 响应判断。
 
 所有富文本块结构相同：`{ "elements": [{ "text_run": { "content": "文本" } }] }`。可通过 `text_run.text_element_style` 添加加粗（`bold`）、斜体（`italic`）等样式。
 
@@ -180,9 +183,28 @@ python3 lark_api.py POST '/open-apis/docx/v1/documents/<document_id>/blocks/<cel
 
 > **表格 cell 总数上限 ~50**：实测 24×4=96 会报 `1770001 invalid param`；7×3=21、5×4=20、6×3=18 均 OK。超限时请拆成多个小表，或改回 bullet 列表。
 
+### 创建画板块（block_type 43）
+
+> 关键点：**必须带 `?document_revision_id=-1` 查询参数**，否则返回 `1770001 invalid param` 且无 field-level 错误信息。我在此踩了很长时间的坑——MCP zod schema 不含 43，API 错误码也不告诉你缺了什么。定论来自 Ray 的实测 curl。
+
+```bash
+python3 lark_api.py POST \
+  '/open-apis/docx/v1/documents/<document_id>/blocks/<document_id>/children?document_revision_id=-1' \
+  '{"children":[{"block_type":43,"board":{"align":1}}],"index":-1}'
+```
+
+- `board.align`：1=左，2=中，3=右；可选
+- `board.width` / `board.height`：像素；可选（未填则自适应）
+- 响应里会返回 `board.token`（这是画板的内部 token，和 `block_id` 不同）
+
+**能不能用 API 往画板里填内容？** 目前公开 MCP 里只有 `board.v1.whiteboardNode.list`（只读），**没有 create/update 节点的公开接口**。所以 API 只能创建**空白**画板，用户需要手动在浏览器里画。这意味着：
+
+- 如果要「写死好」的流程图（让读者一眼看懂），继续走图片路线（下一节）。
+- 如果要给用户提供「可编辑的画布」，创建空白画板块即可。
+
 ### 插入图片 / 用 mermaid 画流程图
 
-Feishu 原生 diagram 块（`block_type: 21`）不能通过 API 创建；需要画流程图、架构图请走「图片」路线：本地用 [`@mermaid-js/mermaid-cli`](https://github.com/mermaid-js/mermaid-cli)（命令名 `mmdc`）把 mermaid 源码渲染为 PNG，再通过三步流程上传：
+本地用 [`@mermaid-js/mermaid-cli`](https://github.com/mermaid-js/mermaid-cli)（命令名 `mmdc`）把 mermaid 源码渲染为 PNG，再通过三步流程上传：
 
 **第一步：创建空 image 块**
 
