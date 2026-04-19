@@ -197,10 +197,27 @@ python3 lark_api.py POST \
 - `board.width` / `board.height`：像素；可选（未填则自适应）
 - 响应里会返回 `board.token`（这是画板的内部 token，和 `block_id` 不同）
 
-**能不能用 API 往画板里填内容？** 目前公开 MCP 里只有 `board.v1.whiteboardNode.list`（只读），**没有 create/update 节点的公开接口**。所以 API 只能创建**空白**画板，用户需要手动在浏览器里画。这意味着：
+**往画板里原生渲染 mermaid / PlantUML**：`POST /open-apis/board/v1/whiteboards/<board_token>/nodes/plantuml`（lark-mcp 只导出了 `list`，但 `create_plantuml` 是公开 API，见 [官方文档](https://open.feishu.cn/document/ukTMukTMukTM/uUDN04SN0QjL1QDN/board-v1/whiteboard-node/create_plantuml)）。
 
-- 如果要「写死好」的流程图（让读者一眼看懂），继续走图片路线（下一节）。
-- 如果要给用户提供「可编辑的画布」，创建空白画板块即可。
+```bash
+python3 lark_api.py POST '/open-apis/board/v1/whiteboards/<board_token>/nodes/plantuml' '{
+  "plant_uml_code": "flowchart LR\n  A-->B\n  B-->C",
+  "syntax_type": 2,
+  "style_type": 1,
+  "diagram_type": 0
+}'
+```
+
+- `syntax_type`：1=PlantUML，2=Mermaid
+- `style_type`：1=可编辑节点（图形本身由多个 shape/connector 组成，用户可继续编辑），2=经典静态图（默认）
+- `diagram_type`：0=自动识别（默认）
+- 需要 scope：`board:whiteboard:node:create`
+
+**注意**：`board_token` 是画板的内部 token，在创建画板响应的 `data.children[0].board.token` 里拿（**不是 `block_id`**）。渲染后用 `GET /open-apis/board/v1/whiteboards/<board_token>/nodes` 查询节点列表可验证。
+
+两条路线选择：
+- **画板 + mermaid 渲染**：读者可继续编辑图形，节点可单独拖动。最佳方案。
+- **图片路线**：本地 `mmdc` 渲染 PNG 上传（见下一节）。不可编辑，但不依赖额外 scope。
 
 ### 插入图片 / 用 mermaid 画流程图
 
