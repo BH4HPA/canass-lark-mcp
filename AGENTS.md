@@ -99,13 +99,62 @@ python3 lark_api.py POST '/open-apis/docx/v1/documents/<document_id>/blocks/<blo
 | 3 | `heading1` | 一级标题 |
 | 4 | `heading2` | 二级标题 |
 | 5 | `heading3` | 三级标题 |
-| 12 | `ordered` | 有序列表 |
-| 13 | `bullet` | 无序列表 |
+| 12 | `bullet` | 无序列表 |
+| 13 | `ordered` | 有序列表 |
 | 14 | `code` | 代码块 |
 | 15 | `quote` | 引用 |
 | 17 | `todo` | 待办事项（`style.done` 标记完成状态） |
+| 31 | `table` | 表格（需配合 `table_cell` 使用，见下文） |
+| 32 | `table_cell` | 表格单元格（不能单独创建，由 table 自动生成） |
 
 所有富文本块结构相同：`{ "elements": [{ "text_run": { "content": "文本" } }] }`。可通过 `text_run.text_element_style` 添加加粗（`bold`）、斜体（`italic`）等样式。
+
+### 创建表格
+
+表格需要两步：先创建表格骨架，再往每个单元格里写内容。
+
+**第一步：创建表格骨架**
+
+```bash
+python3 lark_api.py POST '/open-apis/docx/v1/documents/<document_id>/blocks/<document_id>/children' '{
+  "children": [{
+    "block_type": 31,
+    "table": {
+      "property": {
+        "row_size": 3,
+        "column_size": 2,
+        "column_width": [240, 360],
+        "header_row": true
+      }
+    }
+  }],
+  "index": 0
+}'
+```
+
+返回值中 `data.children[0].table.cells` 是一个按 **行优先** 顺序排列的 cell_id 数组，长度 = `row_size × column_size`。例如 3 行 2 列的表格，cell 顺序是：[行1列1, 行1列2, 行2列1, 行2列2, 行3列1, 行3列2]。
+
+**第二步：向每个 cell 写文本**
+
+```bash
+python3 lark_api.py POST '/open-apis/docx/v1/documents/<document_id>/blocks/<cell_id>/children' '{
+  "children": [{
+    "block_type": 2,
+    "text": {"elements": [{"text_run": {"content": "单元格内容"}}]}
+  }],
+  "index": 0
+}'
+```
+
+每个 cell 必须单独调用一次 children 接口（不能批量）。cell 内可以放 text / bullet / heading 等任意块。
+
+**property 可选字段**：
+- `header_row: true` — 首行作为表头
+- `header_column: true` — 首列作为表头
+- `column_width` — 各列宽度数组（单位：像素），长度必须等于 column_size
+- `merge_info` — 单元格合并信息（默认每个 cell 都是 1×1）
+
+> **表格 cell 总数上限 ~50**：实测 24×4=96 会报 `1770001 invalid param`；7×3=21、5×4=20、6×3=18 均 OK。超限时请拆成多个小表，或改回 bullet 列表。
 
 ### 更新单个块
 
